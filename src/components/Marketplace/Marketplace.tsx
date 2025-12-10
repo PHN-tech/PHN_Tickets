@@ -39,7 +39,9 @@ export default function Marketplace() {
 
     const load = async () => {
         if (!scriptAddress) return;
+        console.log('[Marketplace] Loading UTXOs from script address:', scriptAddress);
         const data = await fetchUtxos(scriptAddress);
+        console.log('[Marketplace] Got UTXOs:', data);
         setUtxos(data || []);
     };
 
@@ -250,7 +252,11 @@ export default function Marketplace() {
                 {utxos.map((u, i) => {
                     const isSelected = selectedUtxo?.input.txHash === u.input.txHash;
                     let price = '';
-                    try { if (u.datum) price = JSON.parse(u.datum).price; } catch (e) { }
+                    try { 
+                        if (u.datum && typeof u.datum === 'object') {
+                            price = u.datum.price || u.datum.cbor;
+                        }
+                    } catch (e) { }
                     const asset = u.assets?.[0];
 
                     return (
@@ -270,7 +276,7 @@ export default function Marketplace() {
                                 </div>
 
                                 <div style={{ marginTop: 8, fontSize: 13, color: '#444' }}>
-                                    <div style={{ marginBottom: 6 }}><strong>TX:</strong> {u.txHash.substring(0, 16)}...</div>
+                                    <div style={{ marginBottom: 6 }}><strong>TX:</strong> {u.input.txHash.substring(0, 16)}...</div>
                                     <div style={{ marginBottom: 6 }}><strong>Price:</strong> {price ? `${price} lovelace` : '—'}</div>
                                 </div>
 
