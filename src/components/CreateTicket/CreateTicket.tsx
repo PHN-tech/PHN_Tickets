@@ -172,13 +172,11 @@ export default function CreateTicket() {
             <div style={{ height: 220, borderRadius: 8, overflow: 'hidden', background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
               {ipfsHash ? (
                 // show image preview from Pinata gateway
-                // if your uploads use another gateway change URL accordingly
                 <img src={`https://gateway.pinata.cloud/ipfs/${ipfsHash}`} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
                 <div style={{ color: '#888' }}>No image uploaded</div>
               )}
             </div>
-
             <label style={{ display: 'block', fontWeight: 600, marginBottom: 8 }}>Upload Poster</label>
             <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0])} style={{ width: '100%', marginBottom: 8 }} />
             <button disabled={uploading || !file} onClick={uploadFile} style={{ width: '100%', padding: 10, background: uploading || !file ? '#ddd' : '#1976d2', color: 'white', border: 'none', borderRadius: 8, cursor: uploading || !file ? 'not-allowed' : 'pointer' }}>{uploading ? 'Uploading...' : 'Upload Poster'}</button>
