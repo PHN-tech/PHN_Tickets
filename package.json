@@ -5,7 +5,9 @@
     "scripts": {
         "dev": "next dev",
         "build": "next build",
-        "start": "next start"
+        "start": "next start",
+        "lock": "npx tsx index.ts lock",
+        "unlock": "npx tsx index.ts unlock"
     },
     "dependencies": {
         "@meshsdk/core": "^1.6.0",
@@ -13,10 +15,13 @@
         "pinata": "^2.5.1",
         "next": "16.0.6",
         "react": "19.2.0",
-        "react-dom": "19.2.0"
+        "react-dom": "19.2.0",
+        "tsx": "^4.9.4",
+        "dotenv": "^17.2.3"
     },
     "devDependencies": {
         "@types/react": "19.2.7",
+        "tsx": "^4.9.4",
         "typescript": "5.9.3"
     }
 }

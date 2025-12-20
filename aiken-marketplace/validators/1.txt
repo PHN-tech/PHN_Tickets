@@ -1,0 +1,161 @@
+{
+  "preamble": {
+    "title": "punnohoang/phns_tickets",
+    "description": "PHNS Tickets Aiken contracts",
+    "version": "0.1.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.19+e525483"
+    }
+  },
+  "validators": [
+    {
+      "title": "ticket_marketplace.ticket_marketplace.spend",
+      "datum": {
+        "title": "datum_opt",
+        "schema": {
+          "$ref": "#/definitions/ticket_marketplace~1Datum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/ticket_marketplace~1Redeemer"
+        }
+      },
+      "compiledCode": "59029a01010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cdc3a400530070024888966002600460106ea800e26466446644b30013003300d375401313232323298009bad30140019bad3014004980a0012444b3001301800489919912cc004c03400a26464b3001301d002801c5901b1bae301b001301837540071598009808801456600260306ea800e00316406516405880b0c054dd50008992cc004c03000626464b3001301c002806c5901a1bad301a001301737540071598009808000c566002602e6ea800e01716406116405480a8c054dd5001180b8034590160c050004c04c004c048004c038dd5004c5900c0acc004c004c02cdd5001466002601c60186ea800a4601e60200032300f30103010301030103010301030103010001911919800800801912cc00400629422b30013371e6eb8c04800400e29462660040046026002807101124444b30013005375a602460206ea802e2660026eb0c008c040dd50041bae3003301037540091325980098051bad30133011375401913259800980398089baa0018acc004cc00cdd6180218091baa00a375c602860246ea80062600e6eb4c008c048dd5003452820208b202030043011375401915980099b87375a602660226ea803120048acc004cc008dd6180198089baa009375c600860226ea801633001300a375a600260226ea801694294500f4528201e8acc004cdc39bad30133011375401890034566002600c60206ea8c04cc050c050c044dd50064566002660046eb0c00cc044dd50049bae30043011375400b13006375a600260226ea8016294100f45900f45900f201e403c46026602860286028602860280028071164028601c0066018601a0026e1d20003009375400716401c30070013003375400f149a26cac80081",
+      "hash": "3bf348b2a7298bbc021c188161ce8f9477de2e9282ed087917ef3a84"
+    },
+    {
+      "title": "ticket_marketplace.ticket_marketplace.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "59029a01010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cdc3a400530070024888966002600460106ea800e26466446644b30013003300d375401313232323298009bad30140019bad3014004980a0012444b3001301800489919912cc004c03400a26464b3001301d002801c5901b1bae301b001301837540071598009808801456600260306ea800e00316406516405880b0c054dd50008992cc004c03000626464b3001301c002806c5901a1bad301a001301737540071598009808000c566002602e6ea800e01716406116405480a8c054dd5001180b8034590160c050004c04c004c048004c038dd5004c5900c0acc004c004c02cdd5001466002601c60186ea800a4601e60200032300f30103010301030103010301030103010001911919800800801912cc00400629422b30013371e6eb8c04800400e29462660040046026002807101124444b30013005375a602460206ea802e2660026eb0c008c040dd50041bae3003301037540091325980098051bad30133011375401913259800980398089baa0018acc004cc00cdd6180218091baa00a375c602860246ea80062600e6eb4c008c048dd5003452820208b202030043011375401915980099b87375a602660226ea803120048acc004cc008dd6180198089baa009375c600860226ea801633001300a375a600260226ea801694294500f4528201e8acc004cdc39bad30133011375401890034566002600c60206ea8c04cc050c050c044dd50064566002660046eb0c00cc044dd50049bae30043011375400b13006375a600260226ea8016294100f45900f45900f201e403c46026602860286028602860280028071164028601c0066018601a0026e1d20003009375400716401c30070013003375400f149a26cac80081",
+      "hash": "3bf348b2a7298bbc021c188161ce8f9477de2e9282ed087917ef3a84"
+    }
+  ],
+  "definitions": {
+    "ByteArray": {
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "Option$Int": {
+      "title": "Option",
+      "anyOf": [
+        {
+          "title": "Some",
+          "description": "An optional value.",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        },
+        {
+          "title": "None",
+          "description": "Nothing.",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "Option$aiken/crypto/VerificationKeyHash": {
+      "title": "Option",
+      "anyOf": [
+        {
+          "title": "Some",
+          "description": "An optional value.",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+            }
+          ]
+        },
+        {
+          "title": "None",
+          "description": "Nothing.",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "aiken/crypto/VerificationKeyHash": {
+      "title": "VerificationKeyHash",
+      "dataType": "bytes"
+    },
+    "ticket_marketplace/Datum": {
+      "title": "Datum",
+      "anyOf": [
+        {
+          "title": "Datum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "event_id",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "seller",
+              "$ref": "#/definitions/aiken~1crypto~1VerificationKeyHash"
+            },
+            {
+              "title": "price",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "ticket_number",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "event_date",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "status",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "ticket_marketplace/Redeemer": {
+      "title": "Redeemer",
+      "anyOf": [
+        {
+          "title": "Redeemer",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "action",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "buyer",
+              "$ref": "#/definitions/Option$aiken~1crypto~1VerificationKeyHash"
+            },
+            {
+              "title": "new_price",
+              "$ref": "#/definitions/Option$Int"
+            },
+            {
+              "title": "quantity",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

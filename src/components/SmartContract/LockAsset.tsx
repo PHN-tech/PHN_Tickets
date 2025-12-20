@@ -10,7 +10,7 @@ import {
     serializePlutusScript,
     stringToHex
 } from '@meshsdk/core';
-import blueprint from '../../../plutus.json';
+import blueprint from '../../../aiken-marketplace/plutus.json';
 
 export default function LockAsset() {
     const { wallet, connected } = useWallet();

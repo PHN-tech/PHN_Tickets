@@ -11,7 +11,7 @@ import {
   serializePlutusScript,
   mConStr0,
 } from "@meshsdk/core";
-import blueprint from '../../../plutus.json';
+import blueprint from '../../../aiken-marketplace/plutus.json';
 
 export default function CreateTicket() {
   const [file, setFile] = useState<File>();
@@ -129,7 +129,7 @@ export default function CreateTicket() {
     }
   };
 
-  // Lock minted ticket to marketplace script
+  // Khóa ticket đã mint vào script marketplace
   const handleLockToMarketplace = async () => {
     if (!connected || !wallet) return alert('Connect wallet first');
     if (!mintedUnit) return alert('No minted ticket to lock');
@@ -171,7 +171,7 @@ export default function CreateTicket() {
           <div style={{ minWidth: 320, maxWidth: 360, flex: '0 0 360px', border: '1px solid #ececec', borderRadius: 12, padding: 12, background: '#fff' }}>
             <div style={{ height: 220, borderRadius: 8, overflow: 'hidden', background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
               {ipfsHash ? (
-                // show image preview from Pinata gateway
+                // hiển thị preview ảnh từ Pinata gateway
                 <img src={`https://gateway.pinata.cloud/ipfs/${ipfsHash}`} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
                 <div style={{ color: '#888' }}>No image uploaded</div>

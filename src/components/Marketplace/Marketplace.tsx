@@ -9,7 +9,7 @@ import {
     mConStr0,
     stringToHex,
 } from '@meshsdk/core';
-import blueprint from '../../../plutus.json';
+import blueprint from '../../../aiken-marketplace/plutus.json';
 
 async function fetchUtxos(address: string) {
     const res = await fetch('/api/blockfrost', {
@@ -24,13 +24,24 @@ async function fetchUtxos(address: string) {
 function hexToString(hex: string) {
     try {
         if (!hex) return '';
-        // remove 0x if present
+        // loại bỏ 0x nếu có
         if (hex.startsWith('0x')) hex = hex.slice(2);
         const bytes = hex.match(/.{1,2}/g) || [];
         return bytes.map(b => String.fromCharCode(parseInt(b, 16))).join('');
     } catch (e) {
         return '';
     }
+}
+
+function normalizeImageUrl(image: string) {
+    if (!image) return null;
+    if (image.startsWith('http')) return image;
+    if (image.startsWith('ipfs://')) {
+        const hash = image.slice(7);
+        return `https://gateway.pinata.cloud/ipfs/${hash}`;
+    }
+    // Giả sử đây là hash IPFS
+    return `https://gateway.pinata.cloud/ipfs/${image}`;
 }
 
 export default function Marketplace() {
@@ -54,17 +65,17 @@ export default function Marketplace() {
         console.log('[Marketplace] Loading UTXOs from script address:', scriptAddress);
         const data = await fetchUtxos(scriptAddress);
         console.log('[Marketplace] Got UTXOs:', data);
-        // Normalize UTXOs: filter token assets, decode datum bytes (hex -> JSON)
+        // Chuẩn hóa UTXOs: lọc tài sản token, giải mã byte datum (hex -> JSON)
         const processed = (data || []).map((u: any) => {
-            // assets: all non-lovelace tokens in the amount array
+            // tài sản: tất cả token không phải lovelace trong mảng amount
             const rawAmounts = u.amount || u.assets || [];
             const assets = Array.isArray(rawAmounts) ? rawAmounts.filter((a: any) => a.unit !== 'lovelace') : [];
 
-            // decode datum if present (Blockfrost provides fields[0].bytes which is hex of JSON string)
+            // giải mã datum nếu có (Blockfrost cung cấp fields[0].bytes là hex của chuỗi JSON)
             let datumParsed: any = null;
             try {
                 if (u.datum && typeof u.datum === 'object') {
-                    // previously we sometimes got { cbor: hex } or { fields: [{ bytes: '...'}] }
+                    // trước đây chúng ta đôi khi nhận { cbor: hex } hoặc { fields: [{ bytes: '...'}] }
                     if (u.datum.cbor) {
                         const s = hexToString(u.datum.cbor);
                         datumParsed = JSON.parse(s);
@@ -115,20 +126,20 @@ export default function Marketplace() {
                     let price = '';
                     try {
                         if (u.datumParsed) {
-                            // prefer numeric price in datum
+                            // ưu tiên giá số trong datum
                             price = u.datumParsed.price ?? u.datumParsed.cbor ?? '';
-                            // if datumParsed is a string try JSON parse
+                            // nếu datumParsed là chuỗi thì thử JSON parse
                             if (!price && typeof u.datumParsed === 'string') {
                                 try { const d = JSON.parse(u.datumParsed); price = d.price ?? ''; } catch (e) { }
                             }
                         }
                     } catch (e) { }
                     const asset = u.assets?.[0];
-                    // derive readable token name from asset.unit (policyid + hex(tokenName))
+                    // lấy tên token có thể đọc từ asset.unit (policyid + hex(tokenName))
                     let tokenName = '';
                     if (asset && asset.unit && asset.unit !== 'lovelace') {
                         const unit = asset.unit;
-                        // policy id is 56 hex chars
+                        // policy id là 56 ký tự hex
                         const policyLen = 56;
                         const tokenHex = unit.length > policyLen ? unit.slice(policyLen) : '';
                         tokenName = tokenHex ? hexToString(tokenHex) : unit;
@@ -137,17 +148,28 @@ export default function Marketplace() {
                     return (
                         <div key={i} style={{ border: isSelected ? '2px solid #007bff' : '1px solid #e6e6e6', borderRadius: 10, overflow: 'hidden', background: '#fff', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
                             <div style={{ height: 140, background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                {/* If datum contains image cid you can render it here. For now show placeholder */}
+                                {/* Nếu datum chứa cid ảnh bạn có thể render ở đây. Hiện tại hiển thị placeholder */}
                                 <div style={{ textAlign: 'center', color: '#999' }}>
-                                    {/** show image if available in datumParsed (image or imageHash) */}
-                                    {u.datumParsed && (u.datumParsed.image || u.datumParsed.imageHash) ? (
-                                        <img src={u.datumParsed.image ? u.datumParsed.image : `https://gateway.pinata.cloud/ipfs/${u.datumParsed.imageHash}`} alt={tokenName || 'ticket'} style={{ maxHeight: 120, maxWidth: '100%', objectFit: 'cover' }} />
-                                    ) : (
-                                        <div>
-                                            <div style={{ fontSize: 12 }}>Ticket</div>
-                                            <div style={{ fontSize: 14, fontWeight: 700, marginTop: 6 }}>{tokenName ? tokenName : (asset ? asset.unit.substring(0, 12) + '...' : '—')}</div>
-                                        </div>
-                                    )}
+                                    {/** hiển thị ảnh nếu có trong metadata (onchain_metadata.image) hoặc datumParsed (image hoặc imageHash) */}
+                                    {(() => {
+                                        let imageSrc = null;
+                                        if (u.metadata?.onchain_metadata?.image) {
+                                            imageSrc = normalizeImageUrl(u.metadata.onchain_metadata.image);
+                                        } else if (u.datumParsed?.image) {
+                                            imageSrc = normalizeImageUrl(u.datumParsed.image);
+                                        } else if (u.datumParsed?.imageHash) {
+                                            imageSrc = `https://gateway.pinata.cloud/ipfs/${u.datumParsed.imageHash}`;
+                                        }
+                                        console.log('[Marketplace] Image src for', u.input?.txHash, ':', imageSrc);
+                                        return imageSrc ? (
+                                            <img src={imageSrc} alt={tokenName || 'ticket'} style={{ maxHeight: 120, maxWidth: '100%', objectFit: 'cover' }} onError={(e) => console.error('[Marketplace] Image load error:', imageSrc)} />
+                                        ) : (
+                                            <div>
+                                                <div style={{ fontSize: 12 }}>Ticket</div>
+                                                <div style={{ fontSize: 14, fontWeight: 700, marginTop: 6 }}>{tokenName ? tokenName : (asset ? asset.unit.substring(0, 12) + '...' : '—')}</div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
 

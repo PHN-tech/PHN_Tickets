@@ -14,6 +14,7 @@ interface ProcessedUTXO {
     };
     assets: Array<{ unit: string; quantity: string }>;
     datum: any;
+    metadata?: any; // Thêm metadata cho asset
 }
 
 
@@ -30,10 +31,16 @@ export async function POST(request: NextRequest) {
 
 
         // 3. Cấu hình Blockfrost
-        const blockfrostURL = process.env.NEXT_PUBLIC_BLOCKFROST_GATEWAY || '';
+        const blockfrostURL = process.env.NEXT_PUBLIC_BLOCKFROST_GATEWAY || 'https://cardano-preprod.blockfrost.io/api/v0';
+        const apiKey = process.env.BLOCKFROST_API_KEY || process.env.NEXT_PUBLIC_BLOCKFROST_API_KEY || '';
         const headers = {
-            Project_id: process.env.NEXT_PUBLIC_BLOCKFROST_API_KEY || ''
+            project_id: apiKey
         };
+
+        if (!apiKey) {
+            console.error('[blockfrost] Missing Blockfrost API key');
+            return NextResponse.json({ success: false, error: 'Missing Blockfrost API key' }, { status: 500 });
+        }
 
 
         // 4. Lấy UTXOs từ Blockfrost
@@ -47,9 +54,22 @@ export async function POST(request: NextRequest) {
 
         for (const utxo of utxos) {
             let datumValue = null;
+            let metadata = null;
 
             console.log(`[blockfrost] Processing UTXO: ${utxo.tx_hash}#${utxo.output_index}`);
             console.log(`[blockfrost] Has data_hash: ${!!utxo.data_hash}, Has inline_datum: ${!!utxo.inline_datum}`);
+
+            // Tìm asset chính (non-lovelace)
+            const mainAsset = utxo.amount.find((a: any) => a.unit !== 'lovelace');
+            if (mainAsset) {
+                try {
+                    const metaResponse = await axios.get(`${blockfrostURL}/assets/${mainAsset.unit}`, { headers });
+                    metadata = metaResponse.data;
+                    console.log(`[blockfrost] Got metadata for ${mainAsset.unit}:`, metadata);
+                } catch (err) {
+                    console.error(`[blockfrost] Error fetching metadata for ${mainAsset.unit}:`, err);
+                }
+            }
 
             if (utxo.data_hash) {
                 try {
@@ -83,7 +103,8 @@ export async function POST(request: NextRequest) {
                     amount: utxo.amount
                 },
                 assets: utxo.amount,
-                datum: datumValue
+                datum: datumValue,
+                metadata: metadata
             });
         }
 

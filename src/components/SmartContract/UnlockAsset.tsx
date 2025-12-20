@@ -11,9 +11,9 @@ import {
     stringToHex,
     BlockfrostProvider,
 } from '@meshsdk/core';
-import blueprint from '../../../plutus.json';
+import blueprint from '../../../aiken-marketplace/plutus.json';
 
-// Create provider for client-side use
+// Tạo provider cho client-side
 const provider = new BlockfrostProvider(process.env.NEXT_PUBLIC_BLOCKFROST_API_KEY || '');
 
 // Hàm lấy UTXO từ transaction hash
