@@ -89,7 +89,24 @@ export class Contract extends MeshAdapter {
         const script: PlutusScript = { code: scriptCbor, version: "V3" };
         const scriptAddress = serializePlutusScript(script).address;
 
-        if (!collateral || collateral.length === 0) throw new Error("No collateral available in wallet. Add collateral UTxO to wallet before unlocking.");
+        // If wallet has no pre-selected collateral, attempt to find a pure-ADA UTxO
+        // in `utxos` to use as a fallback collateral. This helps when running
+        // with a programmatic wallet (mnemonic) where collateral may not be
+        // preconfigured by a browser extension.
+        if (!collateral || collateral.length === 0) {
+            const candidate = utxos.find((u: any) => {
+                const amounts = u.output.amount || [];
+                if (amounts.length !== 1) return false;
+                const a = amounts[0];
+                return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000);
+            });
+            if (candidate) {
+                collateral = [candidate];
+                console.log("Using fallback collateral UTxO:", JSON.stringify(candidate, null, 2));
+            } else {
+                throw new Error("No collateral available in wallet. Add collateral UTxO to wallet before unlocking.");
+            }
+        }
 
         const signerHash = deserializeAddress(walletAddress).pubKeyHash;
 
