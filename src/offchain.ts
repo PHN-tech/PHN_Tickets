@@ -104,7 +104,45 @@ export class Contract extends MeshAdapter {
                 collateral = [candidate];
                 console.log("Using fallback collateral UTxO:", JSON.stringify(candidate, null, 2));
             } else {
-                throw new Error("No collateral available in wallet. Add collateral UTxO to wallet before unlocking.");
+                console.log("No collateral found — attempting to create a fallback collateral UTxO (2 ADA) by sending to self.");
+                try {
+                    const createBuilder = new MeshTxBuilder({ fetcher: this.fetcher, submitter: this.fetcher, verbose: true });
+                    const createTx = await createBuilder
+                        .txOut(walletAddress, [{ unit: "lovelace", quantity: "2000000" }])
+                        .changeAddress(walletAddress)
+                        .selectUtxosFrom(utxos)
+                        .setNetwork("preprod")
+                        .complete();
+                    const signedCreate = await this.wallet.signTx(createTx);
+                    const createHash = await this.wallet.submitTx(signedCreate);
+                    console.log("Submitted collateral creation tx:", createHash);
+
+                    // Poll wallet UTxOs for the newly created pure-ADA UTxO
+                    const maxCreateRetries = 10;
+                    const createDelayMs = 2000;
+                    let found = false;
+                    for (let j = 0; j < maxCreateRetries; j++) {
+                        const refreshed2 = await this.getWalletForTx();
+                        const newUtxos = refreshed2.utxos;
+                        const cand = newUtxos.find((u: any) => {
+                            const amounts = u.output.amount || [];
+                            if (amounts.length !== 1) return false;
+                            const a = amounts[0];
+                            return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000) && u.output.address === walletAddress;
+                        });
+                        if (cand) {
+                            collateral = [cand];
+                            utxos = newUtxos;
+                            console.log("Found created collateral UTxO:", JSON.stringify(cand, null, 2));
+                            found = true;
+                            break;
+                        }
+                        await new Promise((r) => setTimeout(r, createDelayMs));
+                    }
+                    if (!found) throw new Error("Could not find created collateral UTxO after waiting; please fund wallet or add collateral manually.");
+                } catch (e: any) {
+                    throw new Error(`No collateral available and failed to create fallback collateral: ${e?.message || String(e)}`);
+                }
             }
         }
 
