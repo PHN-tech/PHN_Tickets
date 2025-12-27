@@ -43,9 +43,17 @@ export class MeshAdapter {
     }
 
     protected async getWalletForTx() {
-        const utxos = await this.wallet.getUtxos();
+        const utxos = (await this.wallet.getUtxos()) || [];
         const walletAddress = await this.wallet.getChangeAddress();
-        const collateral = await this.wallet.getCollateral();
+        const collateral = (await this.wallet.getCollateral()) || [];
+        
+        if (!walletAddress) {
+            throw new Error("Failed to get wallet address");
+        }
+        if (!utxos || utxos.length === 0) {
+            throw new Error("No UTxOs available in wallet");
+        }
+        
         return { utxos, walletAddress, collateral };
     }
 

@@ -17,7 +17,9 @@ validator ticket_marketplace {
     out_ref: OutputReference,
     self: Transaction,
   ) {
-    expect 1 == 1
+    expect 2 + 2 == 4
+    expect redeemer.action >= 0
+
     True
   }
 

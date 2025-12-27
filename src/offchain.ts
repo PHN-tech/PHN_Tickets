@@ -1,6 +1,6 @@
 import {
     mConStr0,
-    stringToHex,
+    mConStr1,
     MeshTxBuilder,
     PlutusScript,
     applyParamsToScript,
@@ -10,21 +10,25 @@ import {
 import { MeshAdapter } from "./mesh";
 
 export class Contract extends MeshAdapter {
+    // Lock asset on script with full total_quantity
     lockAsset = async ({
-        datum,
         seller,
+        price,
+        policyId,
+        assetName,
         status,
         unit,
         quantity,
     }: {
-        datum?: string;
         seller?: string;
+        price?: number;
+        policyId: string;
+        assetName: string;
         status?: string;
         unit: string;
         quantity: string;
     }): Promise<string> => {
         const { utxos, walletAddress } = await this.getWalletForTx();
-
         const scriptAddress = this.getScriptAddress();
 
         const txBuilder = new MeshTxBuilder({
@@ -32,16 +36,21 @@ export class Contract extends MeshAdapter {
             verbose: true,
         });
 
-        // Build datum according to ticket_marketplace Datum: constructor 0 [seller: bytes, status: int]
-        let datumValue: any;
-        if (seller) {
-            const statusInt = status ? parseInt(status, 10) : 0;
-            datumValue = mConStr0([seller, statusInt]);
-        } else if (datum) {
-            datumValue = mConStr0([stringToHex(datum)]);
-        } else {
-            datumValue = mConStr0([deserializeAddress(walletAddress).pubKeyHash, 0]);
-        }
+        const sellerAddr = seller || deserializeAddress(walletAddress).pubKeyHash;
+        const priceInt = price || 5000000; // default 5 ADA
+        const statusInt = status ? parseInt(status, 10) : 0;
+        const totalQty = parseInt(quantity, 10);
+
+        // Create datum: [seller, price, policy_id, asset_name, status, total_quantity]
+        const datumValue = mConStr0([
+            sellerAddr,
+            priceInt,
+            policyId,
+            assetName,
+            statusInt,
+            totalQty,
+        ]);
+
         const unsignedTx = await txBuilder
             .txOut(scriptAddress, [{ unit, quantity }])
             .txOutInlineDatumValue(datumValue)
@@ -55,23 +64,22 @@ export class Contract extends MeshAdapter {
         return txHash;
     };
 
-    unlockAsset = async ({
+    // Buy tickets: unlock total, keep (total-quantity) locked, send quantity to buyer
+    // Single transaction as required: unlock all, lock remaining back, send purchased
+    buyTickets = async ({
         txHash,
-        redeemer,
-        unit,
         quantity,
     }: {
         txHash: string;
-        redeemer: string;
-        unit?: string;
-        quantity?: string;
+        quantity: string;
     }): Promise<string> => {
         let { utxos, walletAddress, collateral } = await this.getWalletForTx();
 
-        // Try multiple times to fetch the script UTxO (in case of propagation delay)
-        const maxRetries = 5;
+        // Fetch script UTxO
+        const maxRetries = 10;
         const retryDelayMs = 2000;
         let selectedUtxo: any | null = null;
+
         for (let i = 0; i < maxRetries; i++) {
             const fetchedUtxos = await this.fetcher.fetchUTxOs(txHash).catch(() => []);
             if (fetchedUtxos && fetchedUtxos.length > 0) {
@@ -80,23 +88,30 @@ export class Contract extends MeshAdapter {
             }
             if (i < maxRetries - 1) await new Promise((r) => setTimeout(r, retryDelayMs));
         }
+
         if (!selectedUtxo) throw new Error("UTxO not found for given txHash after retries");
 
         console.log("Selected UTxO:", JSON.stringify(selectedUtxo, null, 2));
+        
+        // Validate selectedUtxo structure
+        if (!selectedUtxo.input || !selectedUtxo.input.txHash || selectedUtxo.input.outputIndex === undefined) {
+            throw new Error("Invalid UTxO input structure");
+        }
+        if (!selectedUtxo.output || !selectedUtxo.output.amount || !Array.isArray(selectedUtxo.output.amount)) {
+            throw new Error("Invalid UTxO output structure: missing or invalid amount array");
+        }
 
-        // Refresh wallet UTxOs/collateral after script UTxO is visible
+        // Refresh wallet
         const refreshed = await this.getWalletForTx();
         utxos = refreshed.utxos;
         walletAddress = refreshed.walletAddress;
         collateral = refreshed.collateral;
+
         const scriptCbor = applyParamsToScript(this.contractSpendCompileCode, []);
         const script: PlutusScript = { code: scriptCbor, version: "V3" };
         const scriptAddress = serializePlutusScript(script).address;
 
-        // If wallet has no pre-selected collateral, attempt to find a pure-ADA UTxO
-        // in `utxos` to use as a fallback collateral. This helps when running
-        // with a programmatic wallet (mnemonic) where collateral may not be
-        // preconfigured by a browser extension.
+        // Handle collateral
         if (!collateral || collateral.length === 0) {
             const candidate = utxos.find((u: any) => {
                 const amounts = u.output.amount || [];
@@ -104,128 +119,149 @@ export class Contract extends MeshAdapter {
                 const a = amounts[0];
                 return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000);
             });
+
             if (candidate) {
                 collateral = [candidate];
-                console.log("Using fallback collateral UTxO:", JSON.stringify(candidate, null, 2));
             } else {
-                console.log("No collateral found — attempting to create a fallback collateral UTxO (2 ADA) by sending to self.");
-                try {
-                    const createBuilder = new MeshTxBuilder({ fetcher: this.fetcher, submitter: this.fetcher, verbose: true });
-                    const createTx = await createBuilder
-                        .txOut(walletAddress, [{ unit: "lovelace", quantity: "2000000" }])
-                        .changeAddress(walletAddress)
-                        .selectUtxosFrom(utxos)
-                        .setNetwork("preprod")
-                        .complete();
-                    const signedCreate = await this.wallet.signTx(createTx);
-                    const createHash = await this.wallet.submitTx(signedCreate);
-                    console.log("Submitted collateral creation tx:", createHash);
+                const createBuilder = new MeshTxBuilder({
+                    fetcher: this.fetcher,
+                    submitter: this.fetcher as any,
+                    verbose: true,
+                });
 
-                    // Poll wallet UTxOs for the newly created pure-ADA UTxO
-                    const maxCreateRetries = 10;
-                    const createDelayMs = 2000;
-                    let found = false;
-                    for (let j = 0; j < maxCreateRetries; j++) {
-                        const refreshed2 = await this.getWalletForTx();
-                        const newUtxos = refreshed2.utxos;
-                        const cand = newUtxos.find((u: any) => {
-                            const amounts = u.output.amount || [];
-                            if (amounts.length !== 1) return false;
-                            const a = amounts[0];
-                            return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000) && u.output.address === walletAddress;
-                        });
-                        if (cand) {
-                            collateral = [cand];
-                            utxos = newUtxos;
-                            console.log("Found created collateral UTxO:", JSON.stringify(cand, null, 2));
-                            found = true;
-                            break;
-                        }
-                        await new Promise((r) => setTimeout(r, createDelayMs));
+                const createTx = await createBuilder
+                    .txOut(walletAddress, [{ unit: "lovelace", quantity: "2000000" }])
+                    .changeAddress(walletAddress)
+                    .selectUtxosFrom(utxos)
+                    .setNetwork("preprod")
+                    .complete();
+
+                const signedCreate = await this.wallet.signTx(createTx);
+                const createHash = await this.wallet.submitTx(signedCreate);
+                console.log("Collateral creation tx:", createHash);
+
+                // Wait for collateral
+                let found = false;
+                for (let j = 0; j < maxRetries; j++) {
+                    const refreshed2 = await this.getWalletForTx();
+                    const cand = refreshed2.utxos.find((u: any) => {
+                        const amounts = u.output.amount || [];
+                        if (amounts.length !== 1) return false;
+                        const a = amounts[0];
+                        return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000);
+                    });
+
+                    if (cand) {
+                        collateral = [cand];
+                        utxos = refreshed2.utxos;
+                        found = true;
+                        break;
                     }
-                    if (!found) throw new Error("Could not find created collateral UTxO after waiting; please fund wallet or add collateral manually.");
-                } catch (e: any) {
-                    throw new Error(`No collateral available and failed to create fallback collateral: ${e?.message || String(e)}`);
+                    await new Promise((r) => setTimeout(r, retryDelayMs));
+                }
+
+                if (!found) {
+                    throw new Error(
+                        "Could not find created collateral UTxO after waiting"
+                    );
                 }
             }
         }
 
         const signerHash = deserializeAddress(walletAddress).pubKeyHash;
-
         const txBuilder = new MeshTxBuilder({
             fetcher: this.fetcher,
-            submitter: this.fetcher,
+            submitter: this.fetcher as any,
             verbose: true,
         });
 
-        // Build redeemer: constructor 0 [action: int, buyer: bytes]
-        // Parse redeemer as "action,buyerHex" or default to action=0, buyer=signerHash
-        let redeemerValue: any;
-        if (redeemer.includes(',')) {
-            const [actionStr, buyerHex] = redeemer.split(',');
-            const action = parseInt(actionStr, 10);
-            redeemerValue = mConStr0([action, buyerHex]);
-        } else {
-            // Default: action=0 (buy?), buyer=wallet pubKeyHash
-            redeemerValue = mConStr0([0, signerHash]);
-        }
-
         try {
-            // Determine asset and quantities for partial purchase
+            // Get asset info and quantities
             const amounts = selectedUtxo.output.amount || [];
-            const asset = (amounts.find((a: any) => a.unit !== 'lovelace') || {} as any);
-            const assetUnit = unit || asset.unit;
+            console.log("[buyTickets] Amounts:", amounts);
+            
+            if (!Array.isArray(amounts) || amounts.length === 0) {
+                throw new Error("Invalid or empty amounts in UTxO");
+            }
+            
+            const asset =
+                amounts.find((a: any) => a.unit !== "lovelace") || ({} as any);
+            const assetUnit = asset?.unit;
+            if (!assetUnit) throw new Error("No asset found in UTxO");
             const totalQty = asset && asset.quantity ? BigInt(asset.quantity) : BigInt(1);
-            const buyQty = quantity ? BigInt(quantity) : totalQty;
-            if (buyQty <= BigInt(0)) throw new Error('Invalid purchase quantity');
-            if (buyQty > totalQty) throw new Error('Requested quantity exceeds available amount');
+            const buyQty = BigInt(quantity);
 
-            // Try to parse datum from the selected UTxO so we can re-create a script output with remaining tokens
+            if (buyQty <= BigInt(0)) throw new Error("Invalid purchase quantity");
+            if (buyQty > totalQty) throw new Error("Requested quantity exceeds available");
+
+            const remainingQty = totalQty - buyQty;
+
+            // Parse datum from UTxO
             let datumValue: any = undefined;
             try {
-                const od = selectedUtxo.output?.datum || selectedUtxo.output?.inlineDatum || selectedUtxo.output?.inline_datum;
-                if (od && typeof od === 'object') {
-                    const hex = od.cbor || (od.fields && od.fields[0] && od.fields[0].bytes) || od;
-                    if (typeof hex === 'string') {
-                        const hexStr = hex.replace(/^0x/, '');
-                        const bytes = (hexStr.match(/.{1,2}/g) || []).map((h: string) => parseInt(h, 16));
-                        const s = new TextDecoder().decode(new Uint8Array(bytes));
-                        try {
-                            const parsed = JSON.parse(s);
-                            if (parsed && parsed.seller) {
-                                const statusInt = parsed.status ? parseInt(String(parsed.status), 10) : 0;
-                                datumValue = mConStr0([parsed.seller, statusInt]);
-                            } else {
-                                datumValue = mConStr0([stringToHex(s)]);
-                            }
-                        } catch (e) {
-                            datumValue = mConStr0([stringToHex(s)]);
-                        }
-                    }
+                const od = selectedUtxo.output?.datum ||
+                    selectedUtxo.output?.inlineDatum ||
+                    selectedUtxo.output?.inline_datum;
+
+                if (od && typeof od === "object") {
+                    datumValue = od;
                 }
             } catch (e) {
-                // ignore, we'll proceed without reattaching datum if not available
+                console.warn("[buyTickets] Failed to read datum from UTxO", e);
+                datumValue = undefined;
             }
+
+            // Build redeemer: [action=0(buy), buyer, quantity, new_price(None)]
+            const redeemerValue = mConStr0([
+                0, // action: buy
+                signerHash, // buyer
+                buyQty.toString(), // quantity
+                mConStr1([]), // new_price: Option None
+            ]);
+
+            // Build transaction in single operation:
+            // 1. Spend script UTxO with redeemer
+            // 2. Send purchased quantity to buyer
+            // 3. If remaining > 0: lock remaining back to script with same datum
+            // 4. Add ADA fee for remaining output if needed
 
             const unsignedTx = await txBuilder
                 .spendingPlutusScriptV3()
                 .txIn(
                     selectedUtxo.input.txHash,
                     selectedUtxo.input.outputIndex,
-                    selectedUtxo.output.amount,
+                    amounts, // Use validated amounts instead of selectedUtxo.output.amount
                     scriptAddress
                 )
                 .txInScript(scriptCbor)
                 .txInRedeemerValue(redeemerValue)
                 .txInInlineDatumPresent()
                 .requiredSignerHash(signerHash)
-                // send purchased tokens to buyer
-                .txOut(walletAddress, assetUnit ? [{ unit: assetUnit, quantity: buyQty.toString() }] : undefined)
-                // if remaining tokens exist, return them to the script address (attach original datum if parsed)
+                // Send purchased tokens to buyer
+                .txOut(walletAddress, [
+                    { unit: assetUnit, quantity: buyQty.toString() },
+                ])
+                // If remaining tokens exist, lock them back with same datum
                 .txOut(
                     scriptAddress,
-                    assetUnit && totalQty - buyQty > BigInt(0) ? [{ unit: assetUnit, quantity: (totalQty - buyQty).toString() }] : undefined
-                )
+                    remainingQty > BigInt(0)
+                        ? [{ unit: assetUnit, quantity: remainingQty.toString() }]
+                        : [{ unit: "lovelace", quantity: "1000000" }] // Min ADA
+                );
+
+            // Attach datum to remaining tokens if exists
+            if (datumValue && remainingQty > BigInt(0)) {
+                unsignedTx.txOutInlineDatumValue(datumValue);
+            }
+
+            if (!collateral || collateral.length === 0) {
+                throw new Error("No collateral available for transaction");
+            }
+            if (!utxos || utxos.length === 0) {
+                throw new Error("No UTxOs available for transaction");
+            }
+
+            const finalTx = await unsignedTx
                 .changeAddress(walletAddress)
                 .txInCollateral(
                     collateral[0].input.txHash,
@@ -236,13 +272,311 @@ export class Contract extends MeshAdapter {
                 .selectUtxosFrom(utxos)
                 .setNetwork("preprod")
                 .complete();
-            const signedTx = await this.wallet.signTx(unsignedTx).catch((e) => { throw new Error(`Signing failed: ${String(e)}`); });
-            const txHashResult = await this.wallet.submitTx(signedTx).catch((e) => { throw new Error(`Submit failed: ${String(e)}`); });
+
+            const signedTx = await this.wallet.signTx(finalTx);
+            const txHashResult = await this.wallet.submitTx(signedTx);
             return txHashResult;
         } catch (err: any) {
-            throw new Error(`Failed to build/sign/submit unlock tx: ${err?.message || String(err)}`);
+            console.error("[buyTickets] Transaction build error:", err);
+            throw new Error(`Failed to build/sign/submit buy tx: ${err?.message || String(err)}`);
         }
     };
 
-    // Thêm các phương thức khác cho tạo ticket, marketplace nếu cần
+    // Cancel listing (only seller)
+    cancelListing = async (txHash: string): Promise<string> => {
+        let { utxos, walletAddress, collateral } = await this.getWalletForTx();
+
+        const maxRetries = 10;
+        const retryDelayMs = 2000;
+        let selectedUtxo: any | null = null;
+
+        for (let i = 0; i < maxRetries; i++) {
+            const fetchedUtxos = await this.fetcher.fetchUTxOs(txHash).catch(() => []);
+            if (fetchedUtxos && fetchedUtxos.length > 0) {
+                selectedUtxo = fetchedUtxos[0];
+                break;
+            }
+            if (i < maxRetries - 1) await new Promise((r) => setTimeout(r, retryDelayMs));
+        }
+
+        if (!selectedUtxo) throw new Error("UTxO not found for given txHash");
+
+        // Validate selectedUtxo structure
+        if (!selectedUtxo.input || !selectedUtxo.input.txHash || selectedUtxo.input.outputIndex === undefined) {
+            throw new Error("Invalid UTxO input structure in cancelListing");
+        }
+        if (!selectedUtxo.output || !selectedUtxo.output.amount || !Array.isArray(selectedUtxo.output.amount)) {
+            throw new Error("Invalid UTxO output structure in cancelListing: missing or invalid amount array");
+        }
+
+        const refreshed = await this.getWalletForTx();
+        utxos = refreshed.utxos;
+        walletAddress = refreshed.walletAddress;
+        collateral = refreshed.collateral;
+
+        const scriptCbor = applyParamsToScript(this.contractSpendCompileCode, []);
+        const script: PlutusScript = { code: scriptCbor, version: "V3" };
+        const scriptAddress = serializePlutusScript(script).address;
+
+        if (!collateral || collateral.length === 0) {
+            const candidate = utxos.find((u: any) => {
+                const amounts = u.output.amount || [];
+                if (amounts.length !== 1) return false;
+                const a = amounts[0];
+                return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000);
+            });
+
+            if (!candidate) {
+                throw new Error("No collateral available");
+            }
+            collateral = [candidate];
+        }
+
+        const signerHash = deserializeAddress(walletAddress).pubKeyHash;
+
+        const txBuilder = new MeshTxBuilder({
+            fetcher: this.fetcher,
+            submitter: this.fetcher as any,
+            verbose: true,
+        });
+
+        // Redeemer: [action=1(cancel), buyer, quantity, new_price]
+        const redeemerValue = mConStr0([
+            1, // action: cancel
+            signerHash,
+            0, // quantity (unused for cancel)
+            mConStr1([]), // new_price: None
+        ]);
+
+        try {
+            const amounts = selectedUtxo.output.amount || [];
+            console.log("[cancelListing] Amounts:", amounts);
+            
+            if (!Array.isArray(amounts) || amounts.length === 0) {
+                throw new Error("Invalid or empty amounts in UTxO");
+            }
+            
+            const asset = amounts.find((a: any) => a.unit !== "lovelace") || ({} as any);
+            
+            if (!asset || !asset.unit || !asset.quantity) {
+                throw new Error("Invalid asset in UTxO for cancellation");
+            }
+
+            if (!collateral || collateral.length === 0) {
+                throw new Error("No collateral available for transaction");
+            }
+            if (!utxos || utxos.length === 0) {
+                throw new Error("No UTxOs available for transaction");
+            }
+
+            const unsignedTx = await txBuilder
+                .spendingPlutusScriptV3()
+                .txIn(
+                    selectedUtxo.input.txHash,
+                    selectedUtxo.input.outputIndex,
+                    amounts, // Use validated amounts instead of selectedUtxo.output.amount
+                    scriptAddress
+                )
+                .txInScript(scriptCbor)
+                .txInRedeemerValue(redeemerValue)
+                .txInInlineDatumPresent()
+                .requiredSignerHash(signerHash)
+                // Return all tokens to seller
+                .txOut(walletAddress, [
+                    {
+                        unit: asset.unit,
+                        quantity: asset.quantity,
+                    },
+                ])
+                .changeAddress(walletAddress)
+                .txInCollateral(
+                    collateral[0].input.txHash,
+                    collateral[0].input.outputIndex,
+                    collateral[0].output.amount,
+                    collateral[0].output.address
+                )
+                .selectUtxosFrom(utxos)
+                .setNetwork("preprod")
+                .complete();
+
+            const signedTx = await this.wallet.signTx(unsignedTx);
+            const txHashResult = await this.wallet.submitTx(signedTx);
+            return txHashResult;
+        } catch (err: any) {
+            console.error("Cancel listing error details:", err);
+            throw new Error(`Failed to build/sign/submit cancel tx: ${err?.message || String(err)}`);
+        }
+    };
+
+    // Update price (only seller)
+    updatePrice = async (txHash: string, newPrice: number): Promise<string> => {
+        let { utxos, walletAddress, collateral } = await this.getWalletForTx();
+
+        const maxRetries = 10;
+        const retryDelayMs = 2000;
+        let selectedUtxo: any | null = null;
+
+        for (let i = 0; i < maxRetries; i++) {
+            const fetchedUtxos = await this.fetcher.fetchUTxOs(txHash).catch(() => []);
+            if (fetchedUtxos && fetchedUtxos.length > 0) {
+                selectedUtxo = fetchedUtxos[0];
+                break;
+            }
+            if (i < maxRetries - 1) await new Promise((r) => setTimeout(r, retryDelayMs));
+        }
+
+        if (!selectedUtxo) throw new Error("UTxO not found for given txHash");
+
+        // Validate selectedUtxo structure
+        if (!selectedUtxo.input || !selectedUtxo.input.txHash || selectedUtxo.input.outputIndex === undefined) {
+            throw new Error("Invalid UTxO input structure in updatePrice");
+        }
+        if (!selectedUtxo.output || !selectedUtxo.output.amount || !Array.isArray(selectedUtxo.output.amount)) {
+            throw new Error("Invalid UTxO output structure in updatePrice: missing or invalid amount array");
+        }
+
+        const refreshed = await this.getWalletForTx();
+        utxos = refreshed.utxos;
+        walletAddress = refreshed.walletAddress;
+        collateral = refreshed.collateral;
+
+        const scriptCbor = applyParamsToScript(this.contractSpendCompileCode, []);
+        const script: PlutusScript = { code: scriptCbor, version: "V3" };
+        const scriptAddress = serializePlutusScript(script).address;
+
+        if (!collateral || collateral.length === 0) {
+            const candidate = utxos.find((u: any) => {
+                const amounts = u.output.amount || [];
+                if (amounts.length !== 1) return false;
+                const a = amounts[0];
+                return a.unit === "lovelace" && BigInt(a.quantity) >= BigInt(2000000);
+            });
+
+            if (!candidate) {
+                throw new Error("No collateral available");
+            }
+            collateral = [candidate];
+        }
+
+        const signerHash = deserializeAddress(walletAddress).pubKeyHash;
+
+        // Parse datum to update price
+        let datumValue: any = undefined;
+        try {
+            const od = selectedUtxo.output?.datum ||
+                selectedUtxo.output?.inlineDatum ||
+                selectedUtxo.output?.inline_datum;
+            if (od && typeof od === "object") {
+                datumValue = od;
+            }
+        } catch (e) {
+            console.warn("[updatePrice] Failed to read datum from UTxO", e);
+        }
+
+        const txBuilder = new MeshTxBuilder({
+            fetcher: this.fetcher,
+            submitter: this.fetcher as any,
+            verbose: true,
+        });
+
+        // Redeemer: [action=2(update_price), buyer, quantity, new_price]
+        const redeemerValue = mConStr0([
+            2, // action: update_price
+            signerHash,
+            0, // quantity (unused)
+            mConStr0([newPrice]), // new_price: Some(newPrice)
+        ]);
+
+        try {
+            const amounts = selectedUtxo.output.amount || [];
+            console.log("[updatePrice] Amounts:", amounts);
+            
+            if (!Array.isArray(amounts) || amounts.length === 0) {
+                throw new Error("Invalid or empty amounts in UTxO");
+            }
+
+            if (!collateral || collateral.length === 0) {
+                throw new Error("No collateral available for transaction");
+            }
+            if (!utxos || utxos.length === 0) {
+                throw new Error("No UTxOs available for transaction");
+            }
+
+            const unsignedTx = await txBuilder
+                .spendingPlutusScriptV3()
+                .txIn(
+                    selectedUtxo.input.txHash,
+                    selectedUtxo.input.outputIndex,
+                    amounts, // Use validated amounts instead of selectedUtxo.output.amount
+                    scriptAddress
+                )
+                .txInScript(scriptCbor)
+                .txInRedeemerValue(redeemerValue)
+                .txInInlineDatumPresent()
+                .requiredSignerHash(signerHash)
+                // Return tokens to script with updated datum
+                .txOut(scriptAddress, selectedUtxo.output.amount);
+
+            if (datumValue) {
+                unsignedTx.txOutInlineDatumValue(datumValue);
+            }
+
+            if (!collateral || collateral.length === 0) {
+                throw new Error("No collateral available for transaction");
+            }
+            if (!utxos || utxos.length === 0) {
+                throw new Error("No UTxOs available for transaction");
+            }
+
+            const finalTx = await unsignedTx
+                .changeAddress(walletAddress)
+                .txInCollateral(
+                    collateral[0].input.txHash,
+                    collateral[0].input.outputIndex,
+                    collateral[0].output.amount,
+                    collateral[0].output.address
+                )
+                .selectUtxosFrom(utxos)
+                .setNetwork("preprod")
+                .complete();
+
+            const signedTx = await this.wallet.signTx(finalTx);
+            const txHashResult = await this.wallet.submitTx(signedTx);
+            return txHashResult;
+        } catch (err: any) {
+            console.error("Update price error details:", err);
+            throw new Error(`Failed to build/sign/submit update price tx: ${err?.message || String(err)}`);
+        }
+    };
+
+    // Alias for backward compatibility
+    buyNFT = (txHash: string, quantity?: string): Promise<string> => {
+        return this.buyTickets({
+            txHash,
+            quantity: quantity || "1",
+        });
+    };
+
+    unlockAsset = ({
+        txHash,
+        redeemer,
+        unit,
+        quantity,
+    }: {
+        txHash: string;
+        redeemer?: string;
+        unit?: string;
+        quantity?: string;
+    }): Promise<string> => {
+        const action = redeemer ? parseInt(redeemer, 10) : 1;
+        
+        if (action === 0) {
+            return this.buyTickets({ txHash, quantity: quantity || "1" });
+        } else if (action === 1) {
+            return this.cancelListing(txHash);
+        } else if (action === 2) {
+            return this.updatePrice(txHash, 5000000);
+        }
+        throw new Error("Invalid action");
+    };
 }
