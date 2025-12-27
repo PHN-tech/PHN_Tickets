@@ -528,7 +528,7 @@ Dự án được phát hành dưới license MIT. Chi tiết xem file LICENSE.
 
 - **Issues**: Sử dụng GitHub Issues để báo lỗi
 - **Discussions**: Tham gia GitHub Discussions để thảo luận
-- **Email**: hoang@phn.io (tùy chỉnh email của bạn)
+- **Email**: hoangphong7889@gmail.com
 
 ---
 
